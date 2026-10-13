@@ -1,0 +1,91 @@
+version: '3.8'
+
+x-redis-config: &redis-config
+  image: redis:latest
+  environment:
+    - REDIS_PASSWORD=${REDIS_PASSWORD}
+    - REDIS_USER=${REDIS_USER}
+    - REDIS_USER_PASSWORD=${REDIS_USER_PASSWORD}
+  deploy:
+    resources:
+      limits:
+        cpus: '0.25'
+        memory: 256M
+      reservations:
+        cpus: '0.10'
+        memory: 128M
+  command: >
+    sh -c '
+      mkdir -p /usr/local/etc/redis &&
+      echo "bind 0.0.0.0" > /usr/local/etc/redis/redis.conf &&
+      echo "requirepass $$REDIS_PASSWORD" >> /usr/local/etc/redis/redis.conf &&
+      echo "appendonly yes" >> /usr/local/etc/redis/redis.conf &&
+      echo "appendfsync everysec" >> /usr/local/etc/redis/redis.conf &&
+      echo "user default off" > /usr/local/etc/redis/users.acl &&
+      echo "user $$REDIS_USER on >$$REDIS_USER_PASSWORD ~* +@all" >> /usr/local/etc/redis/users.acl &&
+      redis-server /usr/local/etc/redis/redis.conf --aclfile /usr/local/etc/redis/users.acl
+    '
+  healthcheck:
+    test: [ "CMD", "redis-cli", "-a", "$REDIS_PASSWORD", "ping" ]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+  restart: unless-stopped
+
+services:
+  app:
+    build: .
+    environment:
+      - REDIS_USER=${REDIS_USER}
+      - REDIS_USER_PASSWORD=${REDIS_USER_PASSWORD}
+    depends_on:
+      redis_shard_1:
+        condition: service_healthy
+      redis_shard_2:
+        condition: service_healthy
+      redis_shard_3:
+        condition: service_healthy
+      redis_shard_4:
+        condition: service_healthy
+      redis_shard_5:
+        condition: service_healthy
+
+  redis_shard_1:
+    <<: *redis-config
+    container_name: redis_shard_1
+    ports:
+      - "6381:6379"
+    volumes:
+      - ./redisdata/shard1:/data
+
+  redis_shard_2:
+    <<: *redis-config
+    container_name: redis_shard_2
+    ports:
+      - "6382:6379"
+    volumes:
+      - ./redisdata/shard2:/data
+
+  redis_shard_3:
+    <<: *redis-config
+    container_name: redis_shard_3
+    ports:
+      - "6383:6379"
+    volumes:
+      - ./redisdata/shard3:/data
+
+  redis_shard_4:
+    <<: *redis-config
+    container_name: redis_shard_4
+    ports:
+      - "6384:6379"
+    volumes:
+      - ./redisdata/shard4:/data
+
+  redis_shard_5:
+    <<: *redis-config
+    container_name: redis_shard_5
+    ports:
+      - "6385:6379"
+    volumes:
+      - ./redisdata/shard5:/data
