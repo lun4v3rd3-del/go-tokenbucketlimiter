@@ -1,2 +1,5 @@
 .env
 redisdata/
+
+.idea
+.idea/
