@@ -127,17 +127,15 @@ func (l *TokenBucketLimiter) getGroupConfig(ctx context.Context, groupName strin
 }
 
 func (l *TokenBucketLimiter) Process(req interface{}, f interface{}, ctx context.Context) bool {
-	userKey, err := l.userService.GetUserKey(req)
+	userKey, groupName, err := l.userService.GetUserKey(req)
 	if err != nil {
 		return false
 	}
 
-	//logger := log.New(os.Stdout, "", log.LstdFlags)
-	//logger.Printf("userKey: %s", userKey)
-
-	groupName := l.userService.GetGroupName(userKey)
 	funcName := getFuncName(f)
 
+	//logger := log.New(os.Stdout, "", log.LstdFlags)
+	//logger.Printf("userKey: %s", userKey)
 	//logger.Printf("funcName: %s", funcName)
 
 	userCfg, err := l.getGroupConfig(ctx, groupName)

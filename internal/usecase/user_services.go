@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"net/http"
 	"reflect"
 	"runtime"
@@ -13,7 +14,7 @@ import (
 type Identifier interface {
 	Identify(req interface{}) (bool, error)
 	GetKey(req interface{}) (string, error)
-	GetGroupName() string // Добавили метод, чтобы UserService знал имя группы без парсинга строк
+	GetGroupName() string
 }
 
 type VipIdentifier struct{ name string }
@@ -74,28 +75,22 @@ func NewUserService(identifiers []Identifier) *UserService {
 	}
 }
 
-func (s *UserService) GetUserKey(req interface{}) (string, error) {
+func (s *UserService) GetUserKey(req interface{}) (string, string, error) {
 	for _, identifier := range s.Identifiers {
 		matched, err := identifier.Identify(req)
 		if err != nil {
-			return "", fmt.Errorf("identity check failed: %w", err)
+			return "", "", fmt.Errorf("identity check failed: %w", err)
 		}
 		if matched {
 			key, err := identifier.GetKey(req)
 			if err != nil {
-				return "", fmt.Errorf("failed to generate key: %w", err)
+				return "", "", fmt.Errorf("failed to generate key: %w", err)
 			}
-			return key, nil
+
+			return key, identifier.GetGroupName(), nil
 		}
 	}
-	return "", errors.New("client could not be identified by any strategy")
-}
-
-func (s *UserService) GetGroupName(userKey string) string {
-	if strings.Contains(userKey, "vip") {
-		return "vip"
-	}
-	return "default"
+	return "", "", errors.New("client could not be identified by any strategy")
 }
 
 func hashString(s string) string {
@@ -105,12 +100,22 @@ func hashString(s string) string {
 }
 
 func getClientIP(req *http.Request) string {
-	if ip := req.Header.Get("X-Forwarded-For"); ip != "" {
+	ip := req.Header.Get("X-Forwarded-For")
+	if ip == "" {
+		ip = req.Header.Get("X-Real-IP")
+	}
+
+	if ip != "" {
 		parts := strings.Split(ip, ",")
 		return strings.TrimSpace(parts[0])
 	}
-	parts := strings.Split(req.RemoteAddr, ":")
-	return parts[0]
+
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return req.RemoteAddr
 }
 
 func getFuncName(f interface{}) string {
