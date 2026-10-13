@@ -2,49 +2,18 @@ package main
 
 import (
 	"awesomeProject12/internal/usecase"
+	"awesomeProject12/internal/utils"
 	"context"
 	"fmt"
 	"log"
 	"math/rand/v2"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
-
-type vipIdentifier struct {
-	secret string
-}
-
-type defaultIdentifier struct {
-	group string
-}
-
-type userServiceImpl struct {
-	identifiers []usecase.Identifier
-}
-
-func (s *userServiceImpl) GetUserKey(req interface{}) (string, error) {
-	httpReq, ok := req.(*http.Request)
-	if !ok {
-		return "", fmt.Errorf("invalid request type")
-	}
-	auth := httpReq.Header.Get("Authorization")
-	if strings.Contains(auth, "vip") {
-		return "user_vip_" + httpReq.RemoteAddr, nil
-	}
-	return "user_default_" + httpReq.RemoteAddr, nil
-}
-
-func (s *userServiceImpl) GetGroupName(userKey string) string {
-	if strings.Contains(userKey, "vip") {
-		return "vip"
-	}
-	return "default"
-}
 
 func someAPIEndpoint() {}
 
@@ -81,36 +50,34 @@ func main() {
 		}
 	}
 
-	userService := usecase.NewUserService([]usecase.Identifier{
+	ui := []usecase.Identifier{
 		usecase.NewVipIdentifier("vip"),
 		usecase.NewDefaultIdentifier("default"),
-	})
+	}
+	userService := usecase.NewUserService(ui)
 
 	limiter := usecase.NewTokenBucketLimiter(userService, shards)
 
-	err := limiter.Register("default", []usecase.FuncConfigPair{
+	_ = limiter.Register("default", []usecase.FuncConfigPair{
 		{
 			Func:   someAPIEndpoint,
 			Config: usecase.Config{Rate: 0.1, Capacity: 3.0},
 		},
 	}, ctx)
-	if err != nil {
-		panic(err)
-	}
-
-	err = limiter.Register("vip", []usecase.FuncConfigPair{
+	_ = limiter.Register("vip", []usecase.FuncConfigPair{
 		{
 			Func:   someAPIEndpoint,
 			Config: usecase.Config{Rate: 1, Capacity: 10.0},
 		},
 	}, ctx)
-	if err != nil {
-		panic(err)
-	}
 
-	var countConsumers = 2
-	var iterations = 1000
+	var countConsumers = 200
+	var iterations = 10
 	var wg sync.WaitGroup
+
+	for _, shard := range shards {
+		shard.Client.FlushDB(ctx)
+	}
 
 	for i := 0; i < countConsumers; i++ {
 		wg.Add(1)
@@ -121,22 +88,26 @@ func main() {
 			req.RemoteAddr = fmt.Sprintf("192.168.1.%d", consumerID)
 
 			if consumerID%2 == 0 {
-				req.Header.Set("Authorization", "Bearer vip-token-secret")
+				req.Header.Set("Authorization", fmt.Sprintf("Bearer vip-token-secret-%d", consumerID))
 			} else {
 				req.Header.Set("Authorization", "Bearer regular-token")
 			}
 
 			for j := 0; j < iterations; j++ {
-				if limiter.Process(req, someAPIEndpoint, ctx) {
-					logger.Printf("+ [Consumer #%d] шаг %d: УСПЕХ\n", consumerID, j)
-				} else {
-					logger.Printf("- [Consumer #%d] шаг %d: ОТКЛОНЕНО\n", consumerID, j)
-				}
+				limiter.Process(req, someAPIEndpoint, ctx)
 				time.Sleep(time.Duration(rand.IntN(100)+50) * time.Millisecond)
 			}
 		}(i)
 	}
 
 	wg.Wait()
-	fmt.Println("Все горутины завершили работу.")
+	fmt.Println("\nВсе горутины завершили работу. Сбор статистики...")
+
+	buckets, err := utils.CountActiveBuckets(context.Background(), limiter)
+	if err != nil {
+		logger.Printf("Ошибка сбора статистики: %v", err)
+		return
+	}
+
+	utils.DrawShardLoadChart(limiter.Getshards(), buckets)
 }

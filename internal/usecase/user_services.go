@@ -5,36 +5,47 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net/http"
+	"reflect"
+	"runtime"
 	"strings"
 )
 
 type Identifier interface {
 	Identify(req interface{}) (bool, error)
 	GetKey(req interface{}) (string, error)
+	GetGroupName() string // Добавили метод, чтобы UserService знал имя группы без парсинга строк
 }
 
 type VipIdentifier struct{ name string }
 
 func NewVipIdentifier(name string) *VipIdentifier { return &VipIdentifier{name: name} }
 
+func (i *VipIdentifier) GetGroupName() string { return i.name }
+
 func (i *VipIdentifier) Identify(req interface{}) (bool, error) {
 	httpRequest, ok := req.(*http.Request)
 	if !ok {
-		return false, errors.New("invalid http request")
+		return false, nil
 	}
 	header := httpRequest.Header.Get("Authorization")
 	return strings.Contains(strings.ToLower(header), "vip"), nil
 }
 
 func (i *VipIdentifier) GetKey(req interface{}) (string, error) {
-	httpRequest := req.(*http.Request)
+	httpRequest, ok := req.(*http.Request)
+	if !ok {
+		return "", errors.New("invalid http request type in GetKey")
+	}
 	token := httpRequest.Header.Get("Authorization")
-	return fmt.Sprintf("limit:%s:%s", i.name, hashString(token)), nil
+
+	return fmt.Sprintf("%s:%s", i.name, hashString(token)), nil
 }
 
 type DefaultIdentifier struct{ name string }
 
 func NewDefaultIdentifier(name string) *DefaultIdentifier { return &DefaultIdentifier{name: name} }
+
+func (i *DefaultIdentifier) GetGroupName() string { return i.name }
 
 func (i *DefaultIdentifier) Identify(req interface{}) (bool, error) {
 	_, ok := req.(*http.Request)
@@ -42,11 +53,15 @@ func (i *DefaultIdentifier) Identify(req interface{}) (bool, error) {
 }
 
 func (i *DefaultIdentifier) GetKey(req interface{}) (string, error) {
-	httpRequest := req.(*http.Request)
+	httpRequest, ok := req.(*http.Request)
+	if !ok {
+		return "", errors.New("invalid http request type in GetKey")
+	}
 	ip := getClientIP(httpRequest)
 	ua := httpRequest.Header.Get("User-Agent")
 	fingerprint := fmt.Sprintf("%s:%s", ip, ua)
-	return fmt.Sprintf("limit:%s:%s", i.name, hashString(fingerprint)), nil
+
+	return fmt.Sprintf("%s:%s", i.name, hashString(fingerprint)), nil
 }
 
 type UserService struct {
@@ -77,7 +92,7 @@ func (s *UserService) GetUserKey(req interface{}) (string, error) {
 }
 
 func (s *UserService) GetGroupName(userKey string) string {
-	if strings.Contains(userKey, ":vip:") {
+	if strings.Contains(userKey, "vip") {
 		return "vip"
 	}
 	return "default"
@@ -96,4 +111,8 @@ func getClientIP(req *http.Request) string {
 	}
 	parts := strings.Split(req.RemoteAddr, ":")
 	return parts[0]
+}
+
+func getFuncName(f interface{}) string {
+	return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
 }

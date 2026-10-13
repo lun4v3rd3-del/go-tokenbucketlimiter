@@ -152,12 +152,13 @@ func (l *TokenBucketLimiter) Process(req interface{}, f interface{}, ctx context
 	}
 
 	bucketKey := fmt.Sprintf("%s:%s:%s", BucketHashKey, userKey, funcName)
-	allowed := false
 
 	shardId := l.getShardId(bucketKey)
 	shard := l.shards[shardId]
 
 	for i := 0; i < maxRetries; i++ {
+		var localAllowed bool
+
 		err = shard.Client.Watch(ctx, func(tx *redis.Tx) error {
 			now := time.Now()
 			nowSeconds := float64(now.UnixNano()) / float64(time.Second)
@@ -176,7 +177,6 @@ func (l *TokenBucketLimiter) Process(req interface{}, f interface{}, ctx context
 			} else {
 				tokens, _ = strconv.ParseFloat(data[0].(string), 64)
 				lastTimeSeconds, _ = strconv.ParseFloat(data[1].(string), 64)
-				//logger.Printf("%f %f\n", tokens, lastTimeSeconds)
 
 				elapsed := nowSeconds - lastTimeSeconds
 				if elapsed > 0 {
@@ -190,9 +190,9 @@ func (l *TokenBucketLimiter) Process(req interface{}, f interface{}, ctx context
 
 			if tokens >= 1 {
 				tokens = tokens - 1
-				allowed = true
+				localAllowed = true
 			} else {
-				allowed = false
+				localAllowed = false
 			}
 
 			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
@@ -208,7 +208,7 @@ func (l *TokenBucketLimiter) Process(req interface{}, f interface{}, ctx context
 		}, bucketKey)
 
 		if err == nil {
-			return allowed
+			return localAllowed
 		}
 
 		if errors.Is(err, redis.TxFailedErr) {
@@ -219,4 +219,8 @@ func (l *TokenBucketLimiter) Process(req interface{}, f interface{}, ctx context
 	}
 
 	return false
+}
+
+func (l *TokenBucketLimiter) Getshards() []*Shard {
+	return l.shards
 }
